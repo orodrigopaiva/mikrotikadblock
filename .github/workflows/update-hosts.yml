@@ -1,0 +1,81 @@
+name: Update MikroTik AdBlock hosts
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * *"
+
+permissions:
+  contents: write
+
+jobs:
+  update-hosts:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download StevenBlack hosts
+        run: |
+          curl -L --fail https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts -o /tmp/stevenblack-hosts
+
+      - name: Build MikroTik hosts.txt
+        run: |
+          set -e
+
+          {
+            echo "# mikrotikadblock"
+            echo "# Lista gerada automaticamente para MikroTik DNS Adlist"
+            echo "# Base: StevenBlack/hosts"
+            echo "# Custom: custom-blocklist.txt"
+            echo "# Generated UTC: $(date -u '+%Y-%m-%d %H:%M:%S')"
+            echo ""
+            cat /tmp/stevenblack-hosts
+            echo ""
+            echo "# Custom blocklist"
+            if [ -f custom-blocklist.txt ]; then
+              cat custom-blocklist.txt
+            fi
+          } | awk '
+            /^[[:space:]]*#/ { next }
+            /^[[:space:]]*$/ { next }
+            {
+              if ($1 == "0.0.0.0" || $1 == "127.0.0.1") {
+                host=$2
+              } else {
+                host=$1
+              }
+
+              gsub(/\r/, "", host)
+
+              if (host == "") next
+              if (host == "localhost") next
+              if (host == "localhost.localdomain") next
+              if (host == "local") next
+              if (host == "broadcasthost") next
+              if (host == "0.0.0.0") next
+              if (host ~ /:/) next
+
+              if (!(host in seen)) {
+                seen[host]=1
+                print "0.0.0.0 " host
+              }
+            }
+          ' | sort -u > hosts.txt
+
+          echo "Generated domains: $(wc -l < hosts.txt)" > summary.txt
+
+      - name: Commit updated hosts.txt
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+
+          git add hosts.txt summary.txt
+
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Update MikroTik adblock hosts"
+            git push
+          fi
